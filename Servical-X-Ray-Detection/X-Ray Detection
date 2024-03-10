@@ -1,69 +1,65 @@
-import numpy as np
+import os
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.calibration import LabelEncoder
+import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from keras.preprocessing.image import ImageDataGenerator
-from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
-import nibabel as nib
+import pydicom
+from keras.models import Model
+from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Input
 
-
-train_metadata = pd.read_csv('path/to/train/metadata.csv')
-test_metadata = pd.read_csv('path/to/test/metadata.csv')
-
-def load_nifti_images(file_paths):
+# Function to load DICOM images from a folder with metadata
+def load_dicom_images_from_folder(folder_path, metadata):
     images = []
-    for file_path in file_paths:
-        nifti = nib.load(file_path)
-        image = nifti.get_fdata()
-        images.append(image)
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith('.dcm'):
+            dcm = pydicom.dcmread(os.path.join(folder_path, file_name))
+            image = dcm.pixel_array.astype(float) / np.max(dcm.pixel_array)  # Normalize pixel values
+            images.append(image)
+    # Return images
     return np.array(images)
 
-train_mask_paths = ['path/to/train/masks/' + filename for filename in train_metadata['mask_filename']]
-test_mask_paths = ['path/to/test/masks/' + filename for filename in test_metadata['mask_filename']]
+# Load metadata CSV files
+train_metadata = pd.read_csv('train_meta.csv')
+# test_metadata = pd.read_csv('test.csv')
 
-train_masks = load_nifti_images(train_mask_paths)
-test_masks = load_nifti_images(test_mask_paths)
+# Specify the patient folders for training
 
-train_metadata = pd.read_csv('path/to/train/metadata.csv')
-test_metadata = pd.read_csv('path/to/test/metadata.csv')
+# Load train images for the specified patient folders
+train_images = []
+for folder_name in train_metadata['StudyInstanceUID']:
+    folder_path = os.path.join('train', 'images', folder_name)
+    images = load_dicom_images_from_folder(folder_path, train_metadata[train_metadata['StudyInstanceUID'] == folder_name])
+    train_images.append(images)
 
-train_masks = train_masks / np.max(train_masks)
-test_masks = test_masks / np.max(test_masks)
+# Concatenate the list of images into a single numpy array
+train_images = np.concatenate(train_images)
 
-label_encoder = LabelEncoder()
-train_labels = label_encoder.fit_transform(train_metadata['fracture_bone'])
-test_labels = label_encoder.transform(test_metadata['fracture_bone'])
+# Get image dimensions
+image_height, image_width = train_images[0].shape
 
-model = Sequential([
-    Conv2D(32, (3, 3), activation='relu', input_shape=(None, None, 1)),
-    MaxPooling2D(2, 2),
-    Conv2D(64, (3, 3), activation='relu'),
-    MaxPooling2D(2, 2),
-    Conv2D(128, (3, 3), activation='relu'),
-    MaxPooling2D(2, 2),
-    Flatten(),
-    Dense(512, activation='relu'),
-])
+# Define model architecture
+input_layer = Input(shape=(image_height, image_width, 1))
+conv1 = Conv2D(32, (3, 3), activation='relu')(input_layer)
+pool1 = MaxPooling2D((2, 2))(conv1)
+conv2 = Conv2D(64, (3, 3), activation='relu')(pool1)
+pool2 = MaxPooling2D((2, 2))(conv2)
+conv3 = Conv2D(128, (3, 3), activation='relu')(pool2)
+pool3 = MaxPooling2D((2, 2))(conv3)
+flatten = Flatten()(pool3)
+dense1 = Dense(512, activation='relu')(flatten)
 
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+# Output layers
+output_fracture = Dense(1, activation='sigmoid', name='fracture')(dense1)  # Binary classification: 1 neuron with sigmoid activation
+output_c1c7 = Dense(7, activation='softmax', name='c1c7')(dense1)  # Multi-class classification: 7 neurons with softmax activation
+train_metadata['patient_overall'] = train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].sum(axis=1)
+train_metadata['patient_overall'] = np.where(train_metadata['patient_overall'] > 0, 1, 0)
+# Define the model with multiple outputs
+model = Model(inputs=input_layer, outputs=[output_fracture, output_c1c7])
 
-history = model.fit(
-    train_masks,
-    train_labels,
-    epochs=10,  # adjust as needed
-    validation_data=(test_masks, test_labels)
-)
+# Compile model
+model.compile(optimizer='adam', loss={'fracture': 'binary_crossentropy', 'c1c7': 'categorical_crossentropy'}, 
+              metrics={'fracture': 'accuracy', 'c1c7': 'accuracy'})
 
-test_loss, test_acc = model.evaluate(test_masks, test_labels, verbose=2)
-print('Test accuracy:', test_acc)
+# Train model
+history = model.fit(train_images, {'fracture': train_metadata['patient_overall'].loc[train_metadata['StudyInstanceUID'].isin(train_folders)], 'c1c7': train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].loc[train_metadata['StudyInstanceUID'].isin(train_folders)]}, epochs=1)
 
-plt.plot(history.history['accuracy'], label='accuracy')
-plt.plot(history.history['val_accuracy'], label='val_accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.ylim([0, 1])
-plt.legend(loc='lower right')
-plt.show()
+model.save('trained_model.h5')
