@@ -5,9 +5,10 @@ import tensorflow as tf
 import pydicom
 from keras.models import Model
 from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Input
+from keras.utils import to_categorical
 
 
-def load_dicom_images_from_folder(folder_path, metadata):
+def load_dicom_images_from_folder(folder_path):
     images = []
     for file_name in os.listdir(folder_path):
         if file_name.endswith('.dcm'):
@@ -20,22 +21,16 @@ def load_dicom_images_from_folder(folder_path, metadata):
 
 train_metadata = pd.read_csv('train_meta.csv')
 
-
-
-
-
 train_images = []
 for folder_name in train_metadata['StudyInstanceUID']:
     folder_path = os.path.join('train', 'images', folder_name)
-    images = load_dicom_images_from_folder(folder_path, train_metadata[train_metadata['StudyInstanceUID'] == folder_name])
+    images = load_dicom_images_from_folder(folder_path)
+    images = images[..., np.newaxis].astype(np.float32)
     train_images.append(images)
-
 
 train_images = np.concatenate(train_images)
 
-
-image_height, image_width = train_images[0].shape
-
+image_height, image_width, _ = train_images[0].shape
 
 input_layer = Input(shape=(image_height, image_width, 1))
 conv1 = Conv2D(32, (3, 3), activation='relu')(input_layer)
@@ -47,19 +42,18 @@ pool3 = MaxPooling2D((2, 2))(conv3)
 flatten = Flatten()(pool3)
 dense1 = Dense(512, activation='relu')(flatten)
 
-
 output_fracture = Dense(1, activation='sigmoid', name='fracture')(dense1)  
 output_c1c7 = Dense(7, activation='softmax', name='c1c7')(dense1)  
-train_metadata['patient_overall'] = train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].sum(axis=1)
-train_metadata['patient_overall'] = np.where(train_metadata['patient_overall'] > 0, 1, 0)
 
 model = Model(inputs=input_layer, outputs=[output_fracture, output_c1c7])
-
 
 model.compile(optimizer='adam', loss={'fracture': 'binary_crossentropy', 'c1c7': 'categorical_crossentropy'}, 
               metrics={'fracture': 'accuracy', 'c1c7': 'accuracy'})
 
+target_fracture = train_metadata['patient_overall'].astype(float).values
+target_c1c7 = train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].values
+target_c1c7 = to_categorical(target_c1c7, num_classes=7)
 
-history = model.fit(train_images, {'fracture': train_metadata['patient_overall'].loc[train_metadata['StudyInstanceUID']], 'c1c7': train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].loc[train_metadata['StudyInstanceUID']]}, epochs=1)
+history = model.fit(train_images, {'fracture': target_fracture, 'c1c7': target_c1c7}, epochs=1)
 
 model.save('trained_model.h5')
