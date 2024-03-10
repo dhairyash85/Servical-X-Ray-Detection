@@ -60,6 +60,6 @@ model.compile(optimizer='adam', loss={'fracture': 'binary_crossentropy', 'c1c7':
               metrics={'fracture': 'accuracy', 'c1c7': 'accuracy'})
 
 
-history = model.fit(train_images, {'fracture': train_metadata['patient_overall'].loc[train_metadata['StudyInstanceUID'].isin(train_folders)], 'c1c7': train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].loc[train_metadata['StudyInstanceUID'].isin(train_folders)]}, epochs=1)
+history = model.fit(train_images, {'fracture': train_metadata['patient_overall'].loc[train_metadata['StudyInstanceUID']], 'c1c7': train_metadata[['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']].loc[train_metadata['StudyInstanceUID']]}, epochs=1)
 
 model.save('trained_model.h5')
